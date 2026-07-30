@@ -1,0 +1,6 @@
+{
+  "name": "DarkPlay Video Player",
+  "description": "A modern, mobile-friendly video player with playback speed, casting, subtitles, and offline support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
