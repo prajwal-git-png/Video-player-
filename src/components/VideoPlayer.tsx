@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, 
   Settings, Download, Cast, Subtitles, PictureInPicture, 
-  Upload, FileVideo
+  Upload, FileVideo, Sun, Languages
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -40,9 +40,23 @@ export default function VideoPlayer({ src, fileName, onClose }: VideoPlayerProps
   
   // Settings menus
   const [showSettings, setShowSettings] = useState(false);
+  const [showAudioSettings, setShowAudioSettings] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [quality, setQuality] = useState('Auto');
   
+  // Swipe & Touch
+  const [brightness, setBrightness] = useState(1);
+  const [draggingSide, setDraggingSide] = useState<'left' | 'right' | null>(null);
+  const [activeIndicator, setActiveIndicator] = useState<'brightness' | 'volume' | null>(null);
+  const dragStartY = useRef(0);
+  const dragStartValue = useRef(0);
+  const isDragging = useRef(false);
+  const indicatorTimeout = useRef<NodeJS.Timeout | null>(null);
+
+  // Audio Tracks
+  const [audioTracks, setAudioTracks] = useState<any[]>([]);
+  const [activeAudioTrack, setActiveAudioTrack] = useState<number>(0);
+
   // Subtitles
   const [subtitleFile, setSubtitleFile] = useState<File | null>(null);
   const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
@@ -89,7 +103,77 @@ export default function VideoPlayer({ src, fileName, onClose }: VideoPlayerProps
   };
 
   const handleLoadedMetadata = () => {
-    if (videoRef.current) setDuration(videoRef.current.duration);
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration);
+      const tracks = (videoRef.current as any).audioTracks;
+      if (tracks && tracks.length > 0) {
+        const parsed = [];
+        let activeIdx = 0;
+        for (let i = 0; i < tracks.length; i++) {
+          parsed.push({
+            id: tracks[i].id,
+            label: tracks[i].label || `Track ${i + 1}`,
+            language: tracks[i].language
+          });
+          if (tracks[i].enabled) activeIdx = i;
+        }
+        setAudioTracks(parsed);
+        setActiveAudioTrack(activeIdx);
+      }
+    }
+  };
+
+  const handleAudioTrackChange = (index: number) => {
+    const tracks = (videoRef.current as any)?.audioTracks;
+    if (tracks) {
+      for (let i = 0; i < tracks.length; i++) {
+        tracks[i].enabled = (i === index);
+      }
+    }
+    setActiveAudioTrack(index);
+    setShowAudioSettings(false);
+  };
+
+  const handlePointerDown = (e: React.PointerEvent, side: 'left' | 'right') => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    setDraggingSide(side);
+    dragStartY.current = e.clientY;
+    dragStartValue.current = side === 'left' ? brightness : volume;
+    isDragging.current = false;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!draggingSide) return;
+    const deltaY = dragStartY.current - e.clientY;
+    if (Math.abs(deltaY) > 10) isDragging.current = true;
+
+    if (isDragging.current) {
+      const deltaValue = deltaY / 300;
+      if (draggingSide === 'left') {
+         const newBright = Math.max(0.1, Math.min(2, dragStartValue.current + deltaValue));
+         setBrightness(newBright);
+         setActiveIndicator('brightness');
+         if (indicatorTimeout.current) clearTimeout(indicatorTimeout.current);
+         indicatorTimeout.current = setTimeout(() => setActiveIndicator(null), 1500);
+      } else {
+         const newVol = Math.max(0, Math.min(1, dragStartValue.current + deltaValue));
+         setVolume(newVol);
+         if (videoRef.current) videoRef.current.volume = newVol;
+         setIsMuted(newVol === 0);
+         setActiveIndicator('volume');
+         if (indicatorTimeout.current) clearTimeout(indicatorTimeout.current);
+         indicatorTimeout.current = setTimeout(() => setActiveIndicator(null), 1500);
+      }
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (draggingSide) {
+       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+       if (!isDragging.current) togglePlay();
+       setDraggingSide(null);
+    }
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -218,13 +302,13 @@ export default function VideoPlayer({ src, fileName, onClose }: VideoPlayerProps
       className="relative w-full aspect-video bg-gradient-to-tr from-[#0a0a0a] via-[#111] to-[#0a0a0a] rounded-2xl overflow-hidden group shadow-[0_0_40px_rgba(0,0,0,0.5)] border border-white/5"
       onMouseLeave={() => isPlaying && setShowControls(false)}
       onMouseEnter={() => setShowControls(true)}
-      onClick={() => setShowSettings(false)}
+      onClick={() => { setShowSettings(false); setShowAudioSettings(false); }}
     >
       <video
         ref={videoRef}
         src={src}
         className="w-full h-full object-contain"
-        onClick={togglePlay}
+        style={{ filter: `brightness(${brightness})` }}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={() => setIsPlaying(false)}
@@ -236,6 +320,54 @@ export default function VideoPlayer({ src, fileName, onClose }: VideoPlayerProps
           <track kind="subtitles" src={subtitleUrl} label="Uploaded Subtitles" default />
         )}
       </video>
+
+      {/* Touch Zones */}
+      <div className="absolute inset-0 z-0 flex">
+        <div 
+          className="flex-1" 
+          onPointerDown={(e) => handlePointerDown(e, 'left')}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        />
+        <div 
+          className="flex-1" 
+          onPointerDown={(e) => handlePointerDown(e, 'right')}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        />
+      </div>
+
+      {/* Swipe Indicators */}
+      <AnimatePresence>
+        {activeIndicator === 'brightness' && (
+          <motion.div 
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="absolute left-8 top-1/2 -translate-y-1/2 flex flex-col items-center gap-3 z-30 drop-shadow-xl pointer-events-none"
+          >
+            <div className="h-32 w-2 bg-black/40 rounded-full overflow-hidden border border-white/10 backdrop-blur flex flex-col justify-end">
+              <div className="w-full bg-white rounded-full transition-all" style={{ height: `${((brightness - 0.1) / 1.9) * 100}%` }} />
+            </div>
+            <Sun className="w-6 h-6 text-white" />
+          </motion.div>
+        )}
+        {activeIndicator === 'volume' && (
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 20 }}
+            className="absolute right-8 top-1/2 -translate-y-1/2 flex flex-col items-center gap-3 z-30 drop-shadow-xl pointer-events-none"
+          >
+            <div className="h-32 w-2 bg-black/40 rounded-full overflow-hidden border border-white/10 backdrop-blur flex flex-col justify-end">
+              <div className="w-full bg-white rounded-full transition-all" style={{ height: `${volume * 100}%` }} />
+            </div>
+            {volume === 0 ? <VolumeX className="w-6 h-6 text-white" /> : <Volume2 className="w-6 h-6 text-white" />}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Center Controls */}
       <AnimatePresence>
@@ -348,6 +480,44 @@ export default function VideoPlayer({ src, fileName, onClose }: VideoPlayerProps
                 <button className="px-3 py-1 rounded-md bg-white/10 hover:bg-white/20 text-sm font-semibold transition-colors">
                   {quality}
                 </button>
+              </div>
+              {/* Audio Tracks */}
+              <div className="flex flex-col items-center gap-1 relative">
+                <span className="text-[10px] text-white/40 uppercase font-bold tracking-tighter">Audio</span>
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setShowAudioSettings(!showAudioSettings); setShowSettings(false); }}
+                  className="px-3 py-1 rounded-md bg-white/10 hover:bg-white/20 text-sm font-semibold transition-colors flex items-center gap-1"
+                >
+                  <Languages className="w-3 h-3" />
+                  {audioTracks.length > 0 ? (audioTracks[activeAudioTrack]?.label?.substring(0, 3) || `Trk ${activeAudioTrack + 1}`) : 'Auto'}
+                </button>
+                <AnimatePresence>
+                  {showAudioSettings && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute bottom-full mb-4 w-48 bg-zinc-900/95 backdrop-blur border border-white/10 rounded-xl shadow-2xl p-2 z-50 flex flex-col gap-1 left-1/2 -translate-x-1/2"
+                    >
+                      <div className="px-3 py-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">Audio Track</div>
+                      {audioTracks.length > 0 ? audioTracks.map((track, idx) => (
+                        <button
+                          key={track.id || idx}
+                          onClick={() => handleAudioTrackChange(idx)}
+                          className={cn(
+                            "text-left px-3 py-2 text-sm rounded-lg transition-colors flex items-center justify-between",
+                            activeAudioTrack === idx ? "bg-blue-500/20 text-blue-400 font-medium" : "text-zinc-200 hover:bg-white/10"
+                          )}
+                        >
+                          {track.label || `Track ${idx + 1}`}
+                          {activeAudioTrack === idx && <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />}
+                        </button>
+                      )) : (
+                        <div className="px-3 py-2 text-sm text-zinc-500 text-center">Default / Not Available</div>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
               {/* Subtitles */}
               <div className="flex flex-col items-center gap-1">
